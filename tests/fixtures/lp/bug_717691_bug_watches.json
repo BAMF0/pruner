@@ -1,0 +1,27 @@
+{
+  "entries": [
+    {
+      "bug_link": "https://api.launchpad.net/devel/bugs/717691",
+      "bug_tasks_collection_link": "https://api.launchpad.net/devel/bugs/717691/+watch/85530/bug_tasks",
+      "bug_tracker_link": "https://api.launchpad.net/devel/bugs/bugtrackers/auto-bugs",
+      "date_created": "2011-02-12T13:56:49.489293+00:00",
+      "date_last_changed": null,
+      "date_last_checked": "2026-09-28T04:11:50.676979+00:00",
+      "date_next_checked": "2026-09-29T04:11:50.676979+00:00",
+      "http_etag": "\"2a5feffa6150999c22dd13baa9df1cd65500e548-c85000ee93a03f47fafce438f86c5f2cd5b66551\"",
+      "last_error_type": "Unsupported Bugtracker",
+      "owner_link": "https://api.launchpad.net/devel/~cmiller",
+      "remote_bug": "",
+      "remote_importance": null,
+      "remote_status": null,
+      "resource_type_link": "https://api.launchpad.net/devel/#bug_watch",
+      "self_link": "https://api.launchpad.net/devel/bugs/717691/+watch/85530",
+      "title": "Email to bugs@vim #",
+      "url": "mailto:<email address hidden>",
+      "web_link": "https://bugs.launchpad.net/bugs/717691/+watch/85530"
+    }
+  ],
+  "resource_type_link": "https://api.launchpad.net/devel/#bug_watch-page-resource",
+  "start": 0,
+  "total_size": 1
+}

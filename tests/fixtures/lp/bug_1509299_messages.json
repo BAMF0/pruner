@@ -1,0 +1,55 @@
+{
+  "entries": [
+    {
+      "bug_attachments_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/0/bug_attachments",
+      "content": "We observed an FTBFS of vim with the attached build log.  It seems there are two parallel threads of dh_strip and dh_gencontrol, and they step on each other:\n\nExcerpt:\n\ndh_strip --dbg-package=vim-dbg\ndh_strip debug symbol extraction: enabling -a due to Build-Debug-Symbols: yes in /CurrentlyBuilding\ndh_strip debug symbol extraction: all non-arch-all packages for this build platform armhf: vim-common vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-gnome \ndh_strip debug symbol extraction: not adding gnu debuglinks since --dbg-package is given\ndh_strip debug symbol extraction: packages to act on: vim-gtk \ndh_strip debug symbol extraction: ignored packages: \ndh_strip debug symbol extraction: all non-arch-all packages for this build platform armhf: vim-common vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-gnome \ndh_strip debug symbol extraction: all non-arch-all packages for this build platform armhf: vim-common vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-gnome \ndh_strip debug symbol extraction: not adding gnu debuglinks since --dbg-package is given\ndh_strip debug symbol extraction: packages to act on: vim-athena \ndh_strip debug symbol extraction: ignored packages: \ndh_strip debug symbol extraction: not adding gnu debuglinks since --dbg-package is given\ndh_strip debug symbol extraction: packages to act on: vim-gnome \ndh_strip debug symbol extraction: ignored packages: \nwe have -dbg package(s), not installing anything into ddeb\nfind: `/\u00abPKGBUILDDIR\u00bb/debian/vim-gnome-dbgsym': No such file or directory\nwe have -dbg package(s), not installing anything into ddeb\nwe have -dbg package(s), not installing anything into ddeb\nfind: `/\u00abPKGBUILDDIR\u00bb/debian/vim-gtk-dbgsym': No such file or directory\nfind: `/\u00abPKGBUILDDIR\u00bb/debian/vim-athena-dbgsym': No such file or directory\ndpkg-gencontrol: warning: -is is deprecated; it is without effect\ndpkg-gencontrol: warning: -ip is deprecated; it is without effect\ndpkg-gencontrol: warning: -is is deprecated; it is without effect\ndpkg-gencontrol: warning: -ip is deprecated; it is without effect\ndpkg-gencontrol: warning: -is is deprecated; it is without effect\ndpkg-gencontrol: warning: -ip is deprecated; it is without effect\ndpkg-gencontrol: warning: File::FcntlLock not available; using flock which is not NFS-safe\ndpkg-gencontrol: warning: File::FcntlLock not available; using flock which is not NFS-safe\ndpkg-gencontrol: warning: File::FcntlLock not available; using flock which is not NFS-safe\ndpkg-gencontrol: error: cannot read dhstrip-dummy-debian-files: No such file or directory\n/usr/bin/pkg_create_dbgsym: deferring build of .ddeb to dh_gencontrol\n/usr/bin/pkg_create_dbgsym: deferring build of .ddeb to dh_gencontrol\nError: parsed ddeb section or priority is empty\nmake: *** [binary-arch-vim-athena] Error 1\nmake: *** Waiting for unfinished jobs....\ndebian/rules:555: recipe for target 'binary-arch-vim-athena' failed\ndh_strip debug symbol extraction: all non-arch-all packages for this build platform armhf: vim-common vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-gnome \ndh_strip debug symbol extraction: not adding gnu debuglinks since --dbg-package is given\ndh_strip debug symbol extraction: packages to act on: vim-nox \ndh_strip debug symbol extraction: ignored packages: \ndh_compress\ndh_compress\ndh_fixperms\ndh_fixperms\nwe have -dbg package(s), not installing anything into ddeb\nfind: `/\u00abPKGBUILDDIR\u00bb/debian/vim-nox-dbgsym': No such file or directory\ndh_lintian\ndh_lintian\ndh_installdeb\ndh_installdeb\ndpkg-gencontrol: warning: -is is deprecated; it is without effect\ndpkg-gencontrol: warning: -ip is deprecated; it is without effect\ndpkg-gencontrol: warning: File::FcntlLock not available; using flock which is not NFS-safe\n/usr/bin/pkg_create_dbgsym: deferring build of .ddeb to dh_gencontrol\ndh_shlibdeps\ndh_shlibdeps\ndh_compress\ndh_fixperms\ndh_lintian\ndh_installdeb\ndh_shlibdeps\ndh_gencontrol\ndpkg-gencontrol: warning: File::FcntlLock not available; using flock which is not NFS-safe\ndh_gencontrol debug symbol wrapper: all non-arch-all packages for this build platform armhf: vim-common vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-gnome \ndh_gencontrol debug symbol wrapper: packages to act on: vim-nox \ndh_gencontrol debug symbol wrapper: ignored packages: \ndh_gencontrol debug symbol wrapper: processing package vim-nox (pkgdir debian/vim-nox, ddeb package dir debian/vim-nox-dbgsym)\ndh_gencontrol debug symbol wrapper: building vim-nox-dbgsym_7.4.826-1ubuntu1_armhf.ddeb\ndpkg-deb: building package 'vim-nox-dbgsym' in '../vim-nox-dbgsym_7.4.826-1ubuntu1_armhf.ddeb'.\ndh_gencontrol debug symbol wrapper: dpkg-distaddfile vim-nox-dbgsym_7.4.826-1ubuntu1_armhf.ddeb editors extra",
+      "date_created": "2015-10-23T10:35:15.175104+00:00",
+      "date_deleted": null,
+      "date_last_edited": null,
+      "http_etag": "\"94cedd8c5b1509b2d021ae4a837294e7c0cc6366-c607ca46c77b9673130a54553f81fd2595304c96\"",
+      "owner_link": "https://api.launchpad.net/devel/~pitti",
+      "parent_link": null,
+      "resource_type_link": "https://api.launchpad.net/devel/#message",
+      "revisions_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/0/revisions",
+      "self_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/0",
+      "subject": "parallel build race condition between dh_gencontrol and dh_strip",
+      "visible": true,
+      "web_link": "https://bugs.launchpad.net/ubuntu/+source/vim/+bug/1509299/comments/0"
+    },
+    {
+      "bug_attachments_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/1/bug_attachments",
+      "content": "",
+      "date_created": "2015-10-23T10:35:15.175104+00:00",
+      "date_deleted": null,
+      "date_last_edited": null,
+      "http_etag": "\"fd62a50d2b85428aa681b7985d36bcb999318678-c607ca46c77b9673130a54553f81fd2595304c96\"",
+      "owner_link": "https://api.launchpad.net/devel/~pitti",
+      "parent_link": null,
+      "resource_type_link": "https://api.launchpad.net/devel/#message",
+      "revisions_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/1/revisions",
+      "self_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/1",
+      "subject": "Re: parallel build race condition between dh_gencontrol and dh_strip",
+      "visible": true,
+      "web_link": "https://bugs.launchpad.net/ubuntu/+source/vim/+bug/1509299/comments/1"
+    },
+    {
+      "bug_attachments_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/2/bug_attachments",
+      "content": "This looks like a bug in vim's debian/rules:\n\ndoko | the indep and arch targets are run in parallel\npitti | ah, it never sets DH_OPTIONS=-a or -s, just -i",
+      "date_created": "2015-10-23T10:51:27.199212+00:00",
+      "date_deleted": null,
+      "date_last_edited": null,
+      "http_etag": "\"ec2ad456d3e1d8d482a420d6a4e185d472256872-c607ca46c77b9673130a54553f81fd2595304c96\"",
+      "owner_link": "https://api.launchpad.net/devel/~pitti",
+      "parent_link": null,
+      "resource_type_link": "https://api.launchpad.net/devel/#message",
+      "revisions_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/2/revisions",
+      "self_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/2",
+      "subject": "Re: parallel build race condition between dh_gencontrol and dh_strip",
+      "visible": true,
+      "web_link": "https://bugs.launchpad.net/ubuntu/+source/vim/+bug/1509299/comments/2"
+    }
+  ],
+  "resource_type_link": "https://api.launchpad.net/devel/#message-page-resource",
+  "start": 0,
+  "total_size": 3
+}

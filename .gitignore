@@ -1,0 +1,18 @@
+# Local state: snapshot cache, LLM verdict cache, decisions, audit log.
+# Safe to delete; it is only a cache. The audit log is the exception -- keep it
+# if you have applied changes and might need `pruner rollback`.
+.pruner/
+
+# Generated reports and approvals files.
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/

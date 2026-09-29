@@ -1,0 +1,43 @@
+{
+  "entries": [
+    {
+      "bug_link": "https://api.launchpad.net/devel/bugs/1374898",
+      "data_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4217887/data",
+      "http_etag": "\"c3d6bdc9b8161670f787cd44f1b19bc4ddaf823c-524bd82817f90aa516d2af62a56065cab2ed7b70\"",
+      "message_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1374898/comments/1",
+      "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment",
+      "self_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4217887",
+      "title": "Dependencies.txt",
+      "type": "Unspecified",
+      "url": null,
+      "web_link": "https://bugs.launchpad.net/bugs/1374898/+attachment/4217887"
+    },
+    {
+      "bug_link": "https://api.launchpad.net/devel/bugs/1374898",
+      "data_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4217888/data",
+      "http_etag": "\"07fd648b7d84528a3d61b5967d6887188f60a16e-775e18905ae418a9487ac8645ceefb0f5109df6c\"",
+      "message_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1374898/comments/1",
+      "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment",
+      "self_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4217888",
+      "title": "ProcEnviron.txt",
+      "type": "Unspecified",
+      "url": null,
+      "web_link": "https://bugs.launchpad.net/bugs/1374898/+attachment/4217888"
+    },
+    {
+      "bug_link": "https://api.launchpad.net/devel/bugs/1374898",
+      "data_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4392692/data",
+      "http_etag": "\"715361ba1618d1acdeb712ad4963cba7a600643d-fa3c584f1c33cac2f7690958ec73ab3b7ef89686\"",
+      "message_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1374898/comments/2",
+      "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment",
+      "self_link": "https://api.launchpad.net/devel/bugs/1374898/+attachment/4392692",
+      "title": "lnum-long.diff",
+      "type": "Patch",
+      "url": null,
+      "web_link": "https://bugs.launchpad.net/bugs/1374898/+attachment/4392692"
+    }
+  ],
+  "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment-page-resource",
+  "start": 0,
+  "total_size": 3
+}

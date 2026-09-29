@@ -1,0 +1,152 @@
+# pruner configuration
+#
+# These are the shipped defaults, written out explicitly so a run is reviewable.
+# Everything that affects which bugs get touched lives here rather than in code.
+
+[launchpad]
+service = "production"       # "staging" is a real copy of production whose writes
+                            # are discarded -- rehearse batches there first.
+distribution = "ubuntu"
+timeout = 30.0
+max_retries = 5
+
+# How to decide which releases are still worth fixing bugs on.
+#
+# This matters more than it looks. Launchpad reports trusty (14.04), xenial,
+# bionic and focal as status = "Supported" with supported = true, because they
+# remain under Ubuntu Pro / ESM, and it exposes no end-of-life date at all.
+# Trusting that field would make the EOL rules fire on almost nothing -- exactly
+# the decade-old bugs a backlog sweep exists to clear.
+#
+# ESM is not bug-fixing support: it ships security updates for a subset of
+# packages to subscribers. So by default a release counts as end-of-life once
+# *standard* support ends, read from the `eol` column of
+# /usr/share/distro-info/ubuntu.csv -- the same column `ubuntu-distro-info
+# --supported` uses.
+#
+#   "standard"  - end-of-life once standard support ends (default)
+#   "launchpad" - trust Launchpad's status; ESM counts as supported. Low reach.
+#   "explicit"  - you name the live series in live_series below
+#
+# If distro-info data is unavailable, "standard" degrades to "launchpad", which
+# errs towards pruning less. `pruner fetch` prints what it decided.
+support_policy = "standard"
+# live_series = ["jammy", "noble", "resolute", "stonking"]
+
+[safety]
+# --- Hard exclusions. Each is an absolute veto on touching a bug. -------------
+
+# A bug touched more recently than this is never actioned. Six months is chosen
+# so that anything a human looked at in the last two release cycles is untouched.
+min_quiet_days = 180
+
+# Importances that always get a human.
+protect_importances = ["Critical", "High"]
+
+# "Lots of people care about this" thresholds.
+protect_users_affected = 5
+protect_duplicates = 3
+
+# fnmatch patterns. A bug carrying any matching tag is left alone.
+#   regression-*      : regressions are always worth a human
+#   rls-*             : release-team tracked
+#   block-proposed*   : gating a proposed migration
+#   sru-*, verification-* : in the stable-release-update pipeline
+#   patch             : somebody contributed a fix
+protect_tags = [
+    "regression-*",
+    "rls-*",
+    "block-proposed*",
+    "sru-*",
+    "verification-*",
+    "champagne",
+    "patch",
+]
+
+# Circuit breaker: a policy mistake should not be able to rewrite a whole backlog
+# in one go. Raise deliberately once you trust a configuration.
+max_actions_per_run = 50
+
+# Be a good API citizen when writing.
+action_delay_seconds = 1.0
+
+[rules]
+# Which prune rules may propose an action. See `pruner rules`.
+#
+# eol_series_tasks     : every open task is nominated to an obsolete series
+# eol_series_tag       : all series tags name obsolete releases
+# eol_apport_release   : apport's DistroRelease is an obsolete release
+# likely_fixed         : reported version predates everything we ship, or
+#                        upstream reports it resolved
+# removed_from_archive : package is no longer published in any live series
+# empty_report         : too little information to act on
+#
+# `eol_obsolete_only` is available but off by default: the three specific EOL
+# rules cover the same ground with clearer reporting.
+enabled = [
+    "eol_series_tasks",
+    "eol_series_tag",
+    "eol_apport_release",
+    "likely_fixed",
+    "removed_from_archive",
+    "empty_report",
+]
+
+# Characters of actual prose (apport metadata excluded) below which a report is
+# considered too thin to act on.
+min_desc_chars = 120
+
+# Upstream bug-watch statuses that suggest the issue is already fixed elsewhere.
+fixed_upstream_statuses = [
+    "RESOLVED",
+    "CLOSED",
+    "FIXED",
+    "VERIFIED",
+    "Fix Released",
+    "RESOLVED FIXED",
+]
+
+[llm]
+# The LLM is advisory. It can veto an action or change an eligible needs-info
+# into invalid; it can never make a bug eligible for action. Use "none" to run
+# the rules alone with zero inference.
+provider = "ollama"          # ollama | anthropic | openai | openrouter | none
+model = "qwen2.5:7b"
+# base_url = "http://localhost:11434"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+timeout = 120.0
+max_attempts = 2
+temperature = 0.0
+
+# Minimum confidence for the model to block a rule-proposed action.
+veto_threshold = 0.6
+
+# Minimum confidence for the model to turn needs-info into invalid.
+reclassify_threshold = 0.8
+allow_llm_reclassify_to_invalid = true
+
+# Kinds the model may use to reclassify to invalid. "feature-request" is
+# deliberately absent: Ubuntu convention keeps those open at Wishlist importance
+# rather than closing them, and a bot mass-closing wishlist items would be wrong.
+reclassify_kinds = ["support-question", "spam"]
+
+# Prompt size caps. Apport blocks are stripped before any of these apply.
+max_description_chars = 6000
+max_comments = 6
+max_comment_chars = 800
+
+[comment]
+# Stable token in every comment we post, so the tool recognises its own prior
+# comments and never nags the same bug twice.
+marker = "[pruner-automated-triage]"
+
+signature = """\
+This comment was posted by an automated backlog triage tool. If this bug is \
+still reproducible on a supported Ubuntu release, please reply with the details \
+above and set the status back to New or Confirmed - that is all it takes to keep \
+it open."""
+
+# Name the rule that fired. If the tool is wrong, a maintainer should be able to
+# tell which rule was wrong without reading the source.
+include_rule_names = true

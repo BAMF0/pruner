@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "bug_attachments_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/717691/comments/0/bug_attachments",
+      "content": "Binary package hint: vim\n\nUpon opening a file that is already opened by vim, it will present a dialog prompt.  The prompt can be slightly too large to fit on one standard-size terminal, which makes the correct next action ambiguous for people who see this dialog all the time and know what should be done.\n\nE325: ATTENTION\nFound a swap file by the name \".foo.swp\"\n          owned by: user   dated: Sat Feb 12 08:15:21 2011\n         file name: foo\n          modified: no\n         user name: user   host name: host\n        process ID: 9637 (still running)\nWhile opening file \"foo\"\n             dated: Fri Feb 11 17:42:51 2011\n\n(1) Another program may be editing the same file.\n    If this is the case, be careful not to end up with two\n    different instances of the same file when making changes.\n    Quit, or continue with caution.\n\n(2) An edit session for this file crashed.\n    If this is the case, use \":recover\" or \"vim -r draw.cpp\"\n    to recover the changes (see \":help recovery\").\n    If you did this already, delete the swap file \".draw.cpp.swp\"\n    to avoid this message.\n\n-- More --\n\nThat  -more-  is a prompt to press enter or space to see the rest.  If that \"more\" is not there, then space or enter also answers the next prompt.\n\nAfter space/enter, the remainder is the single line \"Swap file \".foo.swp\" already exists!\"\n\nThe prompt is \"[O]pen Read-Only, (E)dit anyway, (R)ecover, (Q)uit, (A)bort:\"  Space and enter, the message-paging keys also answer this dialog, which causes problems.",
+      "date_created": "2011-02-12T13:30:28.163933+00:00",
+      "date_deleted": null,
+      "date_last_edited": null,
+      "http_etag": "\"41c0492a0e8f7aa367eab8c0419f579f1c7462cc-c607ca46c77b9673130a54553f81fd2595304c96\"",
+      "owner_link": "https://api.launchpad.net/devel/~cmiller",
+      "parent_link": null,
+      "resource_type_link": "https://api.launchpad.net/devel/#message",
+      "revisions_collection_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/717691/comments/0/revisions",
+      "self_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/717691/comments/0",
+      "subject": "vim already-editing message should not page",
+      "visible": true,
+      "web_link": "https://bugs.launchpad.net/ubuntu/+source/vim/+bug/717691/comments/0"
+    }
+  ],
+  "resource_type_link": "https://api.launchpad.net/devel/#message-page-resource",
+  "start": 0,
+  "total_size": 1
+}

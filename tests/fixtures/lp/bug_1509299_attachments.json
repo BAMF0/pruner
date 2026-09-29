@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "bug_link": "https://api.launchpad.net/devel/bugs/1509299",
+      "data_link": "https://api.launchpad.net/devel/bugs/1509299/+attachment/4503103/data",
+      "http_etag": "\"f571f87e2c43a1064e4abeb37fcb7127063c0156-657fd73023d91e56c2be3cb7b3dc1b8c4bdb2065\"",
+      "message_link": "https://api.launchpad.net/devel/ubuntu/+source/vim/+bug/1509299/comments/1",
+      "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment",
+      "self_link": "https://api.launchpad.net/devel/bugs/1509299/+attachment/4503103",
+      "title": "build log",
+      "type": "Unspecified",
+      "url": null,
+      "web_link": "https://bugs.launchpad.net/bugs/1509299/+attachment/4503103"
+    }
+  ],
+  "resource_type_link": "https://api.launchpad.net/devel/#bug_attachment-page-resource",
+  "start": 0,
+  "total_size": 1
+}
