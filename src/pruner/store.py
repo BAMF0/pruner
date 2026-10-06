@@ -29,7 +29,7 @@ from pruner.models import BugSnapshot, Decision, LlmVerdict
 DEFAULT_STATE_DIR = Path(".pruner")
 DB_FILENAME = "cache.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS bugs (
     date_last_updated TEXT,
     fetched_at        TEXT    NOT NULL,
     payload           TEXT    NOT NULL,
+    etag              TEXT,
     PRIMARY KEY (distribution, package, bug_id)
 );
 
@@ -124,11 +125,30 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+            """
+            INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+            ON CONFLICT (key) DO UPDATE SET value = excluded.value
+            """,
             (str(SCHEMA_VERSION),),
         )
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Bring an older cache up to the current schema, additively.
+
+        The store is only a cache and could simply be discarded, but there is no
+        reason to make a user re-download a backlog over a new nullable column.
+        Guarded by inspecting the columns rather than trusting the recorded
+        version, so a cache written by a half-finished run still converges.
+        """
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(bugs)").fetchall()
+        }
+        if "etag" not in columns:
+            self._conn.execute("ALTER TABLE bugs ADD COLUMN etag TEXT")
+            self._conn.commit()
 
     @classmethod
     def open(cls, state_dir: Path | None = None) -> Store:
@@ -146,16 +166,25 @@ class Store:
 
     # -- bug snapshots -----------------------------------------------------
 
-    def put_bug(self, distribution: str, package: str, bug: BugSnapshot) -> None:
+    def put_bug(
+        self,
+        distribution: str,
+        package: str,
+        bug: BugSnapshot,
+        *,
+        etag: str | None = None,
+    ) -> None:
         self._conn.execute(
             """
             INSERT INTO bugs
-                (bug_id, distribution, package, date_last_updated, fetched_at, payload)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (bug_id, distribution, package, date_last_updated, fetched_at,
+                 payload, etag)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (distribution, package, bug_id) DO UPDATE SET
                 date_last_updated = excluded.date_last_updated,
                 fetched_at        = excluded.fetched_at,
-                payload           = excluded.payload
+                payload           = excluded.payload,
+                etag              = COALESCE(excluded.etag, bugs.etag)
             """,
             (
                 bug.id,
@@ -164,13 +193,28 @@ class Store:
                 bug.date_last_updated.isoformat() if bug.date_last_updated else None,
                 _now(),
                 bug.model_dump_json(),
+                etag,
             ),
         )
         self._conn.commit()
 
-    def put_bugs(self, distribution: str, package: str, bugs: list[BugSnapshot]) -> None:
+    def put_bugs(
+        self,
+        distribution: str,
+        package: str,
+        bugs: list[BugSnapshot],
+        *,
+        etags: dict[int, str | None] | None = None,
+    ) -> None:
+        """Persist a batch in one transaction.
+
+        Called from the main thread only: the sqlite connection is not
+        thread-safe, so :mod:`pruner.fetcher` keeps all persistence off its
+        worker threads.
+        """
+        lookup = etags or {}
         for bug in bugs:
-            self.put_bug(distribution, package, bug)
+            self.put_bug(distribution, package, bug, etag=lookup.get(bug.id))
 
     def get_bug(self, distribution: str, package: str, bug_id: int) -> BugSnapshot | None:
         row = self._conn.execute(
@@ -186,6 +230,14 @@ class Store:
             (distribution, package),
         ).fetchall()
         return {int(r["bug_id"]): r["date_last_updated"] for r in rows}
+
+    def cached_etags(self, distribution: str, package: str) -> dict[int, str | None]:
+        """``{bug_id: etag}`` for conditional re-fetching."""
+        rows = self._conn.execute(
+            "SELECT bug_id, etag FROM bugs WHERE distribution = ? AND package = ?",
+            (distribution, package),
+        ).fetchall()
+        return {int(r["bug_id"]): r["etag"] for r in rows}
 
     def iter_bugs(self, distribution: str, package: str) -> Iterator[BugSnapshot]:
         cursor = self._conn.execute(

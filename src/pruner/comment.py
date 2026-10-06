@@ -36,6 +36,8 @@ def compose_comment(
         body = _needs_info(bug, decision, config, package=package)
     elif decision.action is Action.INVALID:
         body = _invalid(bug, decision, config, package=package)
+    elif decision.action is Action.WONT_FIX:
+        body = _wont_fix(bug, decision, config, package=package)
     else:
         raise ValueError(f"no comment defined for action {decision.action}")
 
@@ -91,6 +93,33 @@ def _invalid(
             "If you believe this is wrong, please reply explaining why and set the "
             "status back to New."
         )
+
+    parts.append(_footer(decision, config))
+    return parts
+
+
+def _wont_fix(
+    bug: BugSnapshot, decision: Decision, config: Config, *, package: str
+) -> list[str]:
+    """Age escalation: closed as Won't Fix because the report is too old to verify.
+
+    Distinct from ``_invalid`` in one essential way: Won't Fix does not claim the
+    report was never a real bug, so the body must not imply it was. The reason
+    (the rule's clause plus the age) is already in ``decision.reason``.
+    """
+    parts = [
+        _INVALID_INTRO.format(package=package),
+        f"This bug is being closed as Won't Fix because {decision.reason}.",
+    ]
+
+    parts.append(
+        "Won't Fix rather than Invalid: this is not a judgement on the original "
+        "report, which may well describe a real defect. It is closed because the "
+        "report is too old to verify against anything currently shipped. If you "
+        "still see this problem on a supported Ubuntu release, a fresh report "
+        "against a current package is more useful than reopening this one -- but "
+        "replying here and setting the status back to New also works."
+    )
 
     parts.append(_footer(decision, config))
     return parts

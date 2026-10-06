@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import sys
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -33,6 +32,7 @@ from pruner.llm.base import Analyzer, ProviderError
 from pruner.lp.archive import fetch_archive_index
 from pruner.lp.read import NotFound, ReadClient
 from pruner.models import DEFAULT_FETCH_STATUSES, BugTaskStatus
+from pruner.progress import Reporter, spinner
 from pruner.report import read_approvals, render_csv, render_markdown, write_approvals
 from pruner.store import Store
 
@@ -65,6 +65,17 @@ ServiceOpt = Annotated[
     typer.Option("--service", help="Launchpad service: production or staging."),
 ]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")]
+ConcurrencyOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--concurrency",
+        "-j",
+        min=1,
+        max=32,
+        help="Parallel Launchpad requests (default 4). Fetching is latency-bound, "
+        "so this is the main speed knob.",
+    ),
+]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -94,21 +105,6 @@ def _load(config_path: Path | None, service: str | None) -> Config:
             update={"launchpad": config.launchpad.model_copy(update={"service": service})}
         )
     return config
-
-
-def _progress(label: str) -> Callable[[int, int, str], None]:
-    """Simple counter callback; avoids a live-render fight with log output."""
-    state = {"last": 0.0}
-
-    def callback(index: int, total: int, detail: str) -> None:
-        now = datetime.now(UTC).timestamp()
-        if index == total or now - state["last"] > 1.0:
-            state["last"] = now
-            console.print(f"  {label} {index}/{total} ({detail})", style="dim", end="\r")
-            if index == total:
-                console.print(" " * 60, end="\r")
-
-    return callback
 
 
 def _new_run_id(kind: str) -> str:
@@ -154,6 +150,7 @@ def fetch(
     refresh_series: Annotated[
         bool, typer.Option("--refresh-series", help="Re-read the distro series table.")
     ] = False,
+    concurrency: ConcurrencyOpt = None,
     config_path: ConfigOpt = None,
     state_dir: StateOpt = Path(".pruner"),
     service: ServiceOpt = None,
@@ -173,8 +170,12 @@ def fetch(
     else:
         selected = DEFAULT_FETCH_STATUSES
 
-    with ReadClient(config.launchpad) as client, Store.open(state_dir) as store:
-        table = load_series(client, config, store, refresh=refresh_series)
+    with (
+        ReadClient(config.launchpad, concurrency=concurrency) as client,
+        Store.open(state_dir) as store,
+    ):
+        with spinner(err_console, "Reading the distro series table..."):
+            table = load_series(client, config, store, refresh=refresh_series)
         console.print(f"Series: {table.summary()}")
         console.print(
             f"  live: {', '.join(s.name for s in table.live)}", style="dim"
@@ -193,17 +194,23 @@ def fetch(
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
 
-        console.print(f"Fetching [bold]{package}[/bold] bugs ({', '.join(selected)})...")
-        stats = fetcher.fetch(
-            package,
-            statuses=selected,
-            limit=limit,
-            refresh=refresh,
-            progress=_progress("fetched"),
+        console.print(
+            f"Fetching [bold]{package}[/bold] bugs ({', '.join(selected)}) "
+            f"with {client.concurrency} parallel request(s)..."
         )
+        with Reporter(err_console) as reporter:
+            stats = fetcher.fetch(
+                package,
+                statuses=selected,
+                limit=limit,
+                refresh=refresh,
+                progress=reporter.task("fetched", total=None),
+                stage=reporter.stage(),
+            )
 
         # The archive index feeds likely_fixed and removed_from_archive.
-        index = fetch_archive_index(client, table, package)
+        with spinner(err_console, f"Checking the archive for {package}..."):
+            index = fetch_archive_index(client, table, package)
         store.put_archive(index)
 
     table_out = Table(title=f"fetch: {package}", show_header=False, box=None)
@@ -214,6 +221,7 @@ def fetch(
     table_out.add_row("fully enriched", str(stats.enriched))
     table_out.add_row("skipped by prefilter", str(stats.prefiltered))
     table_out.add_row("errors", str(stats.errors))
+    table_out.add_row("http requests", str(stats.requests))
     table_out.add_row(
         "archive publications",
         f"{len(index.publications)} across {len(index.queried_series)} series",
@@ -281,16 +289,17 @@ def analyze(
             f"(LLM: {analyzer.model_id})..."
         )
         try:
-            result = run_analysis(
-                bugs,
-                config=config,
-                series=table,
-                package=package,
-                analyzer=analyzer,
-                archive=archive,
-                progress=_progress("analysed"),
-                use_cache=not no_llm_cache,
-            )
+            with Reporter(err_console) as reporter:
+                result = run_analysis(
+                    bugs,
+                    config=config,
+                    series=table,
+                    package=package,
+                    analyzer=analyzer,
+                    archive=archive,
+                    progress=reporter.task("analysed", total=len(bugs)),
+                    use_cache=not no_llm_cache,
+                )
         finally:
             analyzer.close()
 
@@ -441,6 +450,7 @@ def _print_stats(data: dict[str, object]) -> None:
     summary.add_row("LLM failures", str(data.get("llm_failures", 0)))
     summary.add_row("LLM vetoes", str(data.get("llm_vetoes", 0)))
     summary.add_row("LLM reclassifications", str(data.get("llm_reclassifications", 0)))
+    summary.add_row("age escalations", str(data.get("age_escalations", 0)))
     console.print(summary)
 
     for title, key in (
@@ -485,7 +495,13 @@ def apply(
     ] = False,
     limit: Annotated[int | None, typer.Option("--limit", help="Cap actions this run.")] = None,
     credentials: Annotated[
-        Path | None, typer.Option("--credentials", help="launchpadlib credentials file.")
+        Path | None,
+        typer.Option(
+            "--credentials",
+            help="launchpadlib credentials file (chmod 600). Overrides the "
+            "environment variable named by [auth].token_env, which is how a bot "
+            "account is normally supplied.",
+        ),
     ] = None,
     config_path: ConfigOpt = None,
     state_dir: StateOpt = Path(".pruner"),
@@ -538,16 +554,6 @@ def apply(
         f"Run [bold]{approved.run_id}[/bold]: {len(selected)} approved of "
         f"{sum(1 for d in decisions if d.actionable)} proposed."
     )
-    if dry_run:
-        console.print("[green]DRY RUN[/green] — no changes will be made. Add --commit to apply.")
-    else:
-        console.print(
-            f"[red bold]LIVE[/red bold] — writing to [bold]{config.launchpad.service}[/bold]."
-        )
-        if config.launchpad.service == "production":
-            typer.confirm(
-                f"Modify {len(selected)} bug(s) on PRODUCTION Launchpad?", abort=True
-            )
 
     writer: BugWriter
     if dry_run:
@@ -562,29 +568,51 @@ def apply(
         writer = DryRunWriter(statuses)
     else:
         from pruner.lp.write import LaunchpadWriter, WriteError
+        from pruner.secrets import CredentialError, resolve_credential
 
+        # The writer is built before the confirmation prompt so the prompt can
+        # name the account. Thinking you are the bot when you are actually
+        # yourself is the main failure mode a bot account introduces, and the
+        # cheapest place to catch it is the one prompt a human always reads.
         try:
-            writer = LaunchpadWriter(config, credentials_file=credentials)
-        except WriteError as exc:
+            source = resolve_credential(config, cli_path=credentials)
+            writer = LaunchpadWriter(config, source=source)
+        except (CredentialError, WriteError) as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
+
+    if dry_run:
+        console.print("[green]DRY RUN[/green] — no changes will be made. Add --commit to apply.")
+    else:
+        account = f"~{writer.actor}" if writer.actor else "(unknown account)"
+        console.print(
+            f"[red bold]LIVE[/red bold] — writing to "
+            f"[bold]{config.launchpad.service}[/bold] as [bold]{account}[/bold] "
+            f"(credential: {source.origin})."
+        )
+        if config.launchpad.service == "production":
+            typer.confirm(
+                f"Modify {len(selected)} bug(s) on PRODUCTION Launchpad as {account}?",
+                abort=True,
+            )
 
     from pruner.actions import apply_decisions
 
     audit = AuditLog.open(state_dir)
     apply_run_id = _new_run_id("apply")
-    result = apply_decisions(
-        selected,
-        bugs,
-        config=config,
-        package=package,
-        writer=writer,
-        audit=audit,
-        run_id=apply_run_id,
-        dry_run=dry_run,
-        limit=limit,
-        progress=_progress("applied"),
-    )
+    with Reporter(err_console) as reporter:
+        result = apply_decisions(
+            selected,
+            bugs,
+            config=config,
+            package=package,
+            writer=writer,
+            audit=audit,
+            run_id=apply_run_id,
+            dry_run=dry_run,
+            limit=limit,
+            progress=reporter.task("applied"),
+        )
 
     console.print(
         f"\napplied={result.applied} skipped={result.skipped} failed={result.failed}"
@@ -643,29 +671,71 @@ def rollback(
         )
     else:
         from pruner.lp.write import LaunchpadWriter, WriteError
+        from pruner.secrets import CredentialError, resolve_credential
 
         try:
-            writer = LaunchpadWriter(config, credentials_file=credentials)
-        except WriteError as exc:
+            source = resolve_credential(config, cli_path=credentials)
+            writer = LaunchpadWriter(config, source=source)
+        except (CredentialError, WriteError) as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2) from exc
 
     from pruner.actions import rollback_run
 
-    result = rollback_run(
-        run_id,
-        config=config,
-        writer=writer,
-        audit=audit,
-        new_run_id=_new_run_id("rollback"),
-        dry_run=dry_run,
-        progress=_progress("reverted"),
-    )
+    with Reporter(err_console) as reporter:
+        result = rollback_run(
+            run_id,
+            config=config,
+            writer=writer,
+            audit=audit,
+            new_run_id=_new_run_id("rollback"),
+            dry_run=dry_run,
+            progress=reporter.task("reverted"),
+        )
     console.print(
         f"\nreverted={result.applied} skipped={result.skipped} failed={result.failed}"
     )
     for reason, count in sorted(result.reasons.items(), key=lambda kv: -kv[1]):
         console.print(f"  [dim]{reason}: {count}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# whoami
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def whoami(
+    credentials: Annotated[
+        Path | None,
+        typer.Option("--credentials", help="launchpadlib credentials file (chmod 600)."),
+    ] = None,
+    config_path: ConfigOpt = None,
+    service: ServiceOpt = None,
+    verbose: VerboseOpt = False,
+) -> None:
+    """Show which Launchpad account writes would come from.
+
+    Verifies the resolved credential against Launchpad and prints the account.
+    Run this before a production ``apply`` whenever a bot account is in play:
+    the audit log and every bug's history will name whoever this prints.
+    """
+    _setup_logging(verbose)
+    config = _load(config_path, service)
+
+    from pruner.lp.write import LaunchpadWriter, WriteError
+    from pruner.secrets import CredentialError, resolve_credential
+
+    try:
+        source = resolve_credential(config, cli_path=credentials)
+        writer = LaunchpadWriter(config, source=source)
+    except (CredentialError, WriteError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    console.print(f"service:    {config.launchpad.service}")
+    console.print(f"credential: {source.origin}")
+    console.print(f"acting as:  ~{writer.actor}" if writer.actor else "acting as:  (unknown)")
 
 
 # ---------------------------------------------------------------------------

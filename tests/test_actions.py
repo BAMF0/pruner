@@ -140,6 +140,54 @@ class TestApply:
         )
         assert writer.status_changes == [(TASK_LINK, "Invalid")]
 
+    def test_wont_fix_sets_wont_fix(self, tmp_path: Path, config: Config) -> None:
+        bug, writer, audit = setup(tmp_path)
+        stats = apply_decisions(
+            [decision(action=Action.WONT_FIX, reason="it is ancient")],
+            {1: bug},
+            config=config,
+            package="vim",
+            writer=writer,
+            audit=audit,
+            run_id="r1",
+            dry_run=False,
+        )
+        assert stats.applied == 1
+        assert writer.status_changes == [(TASK_LINK, "Won't Fix")]
+        assert len(writer.comments) == 1
+
+    def test_wont_fix_applies_from_incomplete(self, tmp_path: Path, config: Config) -> None:
+        """An escalation decision against a task already at Incomplete still
+        applies: Incomplete is actionable, Won't Fix is a different target."""
+        bug, writer, audit = setup(tmp_path, BugTaskStatus.INCOMPLETE)
+        stats = apply_decisions(
+            [decision(action=Action.WONT_FIX, reason="it is ancient")],
+            {1: bug},
+            config=config,
+            package="vim",
+            writer=writer,
+            audit=audit,
+            run_id="r1",
+            dry_run=False,
+        )
+        assert stats.applied == 1
+        assert writer.status_changes == [(TASK_LINK, "Won't Fix")]
+
+    def test_actor_is_recorded(self, tmp_path: Path, config: Config) -> None:
+        """With a bot account in play, "who did this" must be in the audit log."""
+        bug, writer, audit = setup(tmp_path)
+        apply_decisions(
+            [decision()],
+            {1: bug},
+            config=config,
+            package="vim",
+            writer=writer,
+            audit=audit,
+            run_id="r1",
+            dry_run=False,
+        )
+        assert audit.records()[0].actor == writer.actor
+
     def test_comment_is_posted_before_status_change(
         self, tmp_path: Path, config: Config
     ) -> None:
@@ -370,6 +418,31 @@ class TestRollback:
         assert writer.status_changes == [(TASK_LINK, "New")]
         assert len(writer.comments) == 1
 
+    def test_restores_from_wont_fix(self, tmp_path: Path) -> None:
+        config = Config.model_validate({"safety": {"action_delay_seconds": 0}})
+        bug, writer, audit = setup(tmp_path)
+        apply_decisions(
+            [decision(action=Action.WONT_FIX, reason="it is ancient")],
+            {1: bug},
+            config=config,
+            package="vim",
+            writer=writer,
+            audit=audit,
+            run_id="r1",
+            dry_run=False,
+        )
+        reverter = DryRunWriter({TASK_LINK: "Won't Fix"})
+        stats = rollback_run(
+            "r1",
+            config=config,
+            writer=reverter,
+            audit=audit,
+            new_run_id="rb1",
+            dry_run=False,
+        )
+        assert stats.applied == 1
+        assert reverter.status_changes == [(TASK_LINK, "New")]
+
     def test_refuses_when_state_changed_since(self, tmp_path: Path) -> None:
         """If a human moved the bug on after our change, their state wins."""
         config = Config.model_validate({"safety": {"action_delay_seconds": 0}})
@@ -435,6 +508,23 @@ class TestComment:
         )
         assert "Invalid" in body
         assert "set the status back to New" in body
+
+    def test_wont_fix_comment_content(self, config: Config) -> None:
+        body = compose_comment(
+            bug_with_task(),
+            decision(
+                action=Action.WONT_FIX,
+                reason="it was reported against Ubuntu 14.04 (trusty), which "
+                "reached end of life, and it was reported 12 years ago",
+            ),
+            config,
+            package="vim",
+        )
+        assert "Won't Fix" in body
+        assert "12 years ago" in body, "must state the age, the point of the action"
+        assert "not a judgement" in body, "must not imply the report was never a bug"
+        assert "back to New" in body, "must say how to undo it"
+        assert config.comment.marker in body
 
     def test_reclassified_comment_points_elsewhere(self, config: Config) -> None:
         from pruner.models import BugKind, IsABug, LlmVerdict

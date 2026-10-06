@@ -40,6 +40,7 @@ class AnalysisStats(BaseModel):
     llm_failures: int = 0
     llm_vetoes: int = 0
     llm_reclassifications: int = 0
+    age_escalations: int = 0
     eligible_before_llm: int = 0
     """Bugs the rules made eligible, before the LLM had a say. The gap between
     this and the actioned count is exactly the LLM's contribution."""
@@ -66,6 +67,8 @@ class AnalysisStats(BaseModel):
             self.llm_vetoes += 1
         if decision.llm_reclassified:
             self.llm_reclassifications += 1
+        if decision.age_escalated:
+            self.age_escalations += 1
 
 
 class AnalysisResult(BaseModel):
@@ -99,7 +102,7 @@ def analyze(
     snapshots = list(bugs)
     for index, bug in enumerate(snapshots, start=1):
         if progress:
-            progress(index, len(snapshots), f"bug #{bug.id}")
+            progress(index, len(snapshots), f"bug #{bug.id} · {stats.llm_calls} llm")
 
         exclusions = evaluate_exclusions(
             bug, config, series, package, now=moment
@@ -122,6 +125,7 @@ def analyze(
             verdict=verdict,
             config=config,
             series=series,
+            now=moment,
         )
         decisions.append(decision)
         stats.record(decision)

@@ -173,7 +173,13 @@ def render_markdown(
         "| --- | --- |",
     ]
 
-    for action in (Action.NEEDS_INFO, Action.INVALID, Action.ESCALATE, Action.KEEP):
+    for action in (
+        Action.NEEDS_INFO,
+        Action.INVALID,
+        Action.WONT_FIX,
+        Action.ESCALATE,
+        Action.KEEP,
+    ):
         out.append(f"| {action.value} | {stats.actions.get(action.value, 0)} |")
 
     out.extend(
@@ -181,7 +187,8 @@ def render_markdown(
             "",
             f"Rules made **{stats.eligible_before_llm}** bug(s) eligible for action. "
             f"The LLM then vetoed **{stats.llm_vetoes}** and reclassified "
-            f"**{stats.llm_reclassifications}**.",
+            f"**{stats.llm_reclassifications}**. Age escalation hardened "
+            f"**{stats.age_escalations}** to Won't Fix.",
             "",
         ]
     )

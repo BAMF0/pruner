@@ -10,6 +10,31 @@ distribution = "ubuntu"
 timeout = 30.0
 max_retries = 5
 
+# Parallel Launchpad requests. This is the main speed knob.
+#
+# Fetching is latency-bound, not bandwidth-bound: a request costs ~230ms while
+# often returning a couple of hundred bytes, and a fully enriched bug needs nine
+# of them. Launchpad is HTTP/1.1 only, so there is no multiplexing to exploit.
+#
+# Measured end-to-end on previously-unfetched packages (first touch, so no
+# Launchpad-side cache warming to flatter the result):
+#
+#   workers   per request   speedup
+#   1         230 ms        --
+#   4          95 ms        2.4x
+#   8          45 ms        5.1x
+#
+# 4 is the default because Launchpad publishes no rate limits, launchpadlib
+# itself is sequential, and a backlog sweep is not urgent. Working through a
+# large package? `--concurrency 8` roughly halves the time again. Override
+# per-run with `-j`.
+max_concurrency = 4
+
+# Bugs processed per pipeline pass. Bounds peak memory on a large backlog (all
+# raw payloads for a chunk are held at once) and means an interrupted run keeps
+# whatever chunks it already committed.
+chunk_size = 100
+
 # How to decide which releases are still worth fixing bugs on.
 #
 # This matters more than it looks. Launchpad reports trusty (14.04), xenial,
@@ -69,6 +94,23 @@ max_actions_per_run = 50
 
 # Be a good API citizen when writing.
 action_delay_seconds = 1.0
+
+[age]
+# Harden an eligible needs-info into wont-fix when the bug is very old.
+#
+# This only ever hardens an action the rules already authorised -- it cannot
+# make an unflagged bug actionable, no matter how old it is. The distinction
+# between the two statuses matters: Incomplete asks the reporter to re-verify
+# (and expires silently if they don't); Won't Fix says plainly that the report
+# is too old to verify against anything currently shipped. For a bug reported
+# a decade ago against a dead release, the Incomplete theatre is pointless.
+wont_fix_after_days = 2555    # ~7 years; 0 disables
+
+# Which rule claims age may escalate, mirroring how the LLM's veto is scoped.
+# Only "lifecycle" by default: old AND on a dead release is the airtight case.
+# A quality hit (empty_report) still just asks for information -- a thin report
+# being old is not itself a reason to close it.
+claims = ["lifecycle"]
 
 [rules]
 # Which prune rules may propose an action. See `pruner rules`.
@@ -135,6 +177,23 @@ reclassify_kinds = ["support-question", "spam"]
 max_description_chars = 6000
 max_comments = 6
 max_comment_chars = 800
+
+[auth]
+# Which Launchpad account `apply` writes as. The credential itself NEVER goes
+# in this file -- put a literal token here and pruner refuses to start.
+#
+# Launchpad auth is OAuth 1.0a; a credential is the serialised blob launchpadlib
+# produces after a one-time browser authorisation. To act as a bot account,
+# authorise once as the bot (any launchpadlib script, or `pruner apply` on
+# staging while logged in as the bot), then supply the blob via the environment
+# variable named here -- e.g. from your secret manager -- or a chmod 600 file.
+token_env = "PRUNER_LP_CREDENTIALS"
+# credentials_file = "~/.config/pruner/bot.credentials"
+
+# Fall back to the keyring/browser flow when nothing above supplied a
+# credential. Fine on a laptop; set false in automation so a revoked token
+# fails fast instead of hanging on a browser prompt.
+allow_interactive = true
 
 [comment]
 # Stable token in every comment we post, so the tool recognises its own prior

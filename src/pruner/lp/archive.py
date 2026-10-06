@@ -16,12 +16,13 @@ orderings behave exactly like dpkg.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+from collections.abc import Callable
+from functools import lru_cache, partial
 
 from debian.debian_support import version_compare
 from pydantic import BaseModel, ConfigDict
 
-from pruner.lp.read import LaunchpadError, NotFound, ReadClient
+from pruner.lp.read import NotFound, ReadClient
 from pruner.lp.series import Series, SeriesTable
 
 log = logging.getLogger(__name__)
@@ -97,28 +98,44 @@ def fetch_archive_index(
     package: str,
     *,
     series: tuple[Series, ...] | None = None,
+    on_done: Callable[[], None] | None = None,
 ) -> ArchiveIndex:
-    """Look up ``package`` across the live series of a distribution."""
-    targets = series if series is not None else table.live
+    """Look up ``package`` across the live series of a distribution.
+
+    The per-series lookups are independent, so they run in parallel; sequentially
+    this was one round-trip per live release for no reason.
+    """
+    targets = [s for s in (series if series is not None else table.live) if s.self_link]
+    if not targets:
+        return ArchiveIndex(distribution=table.distribution, package=package)
+
+    results = client.gather(
+        [
+            partial(
+                client.published_sources,
+                table.distribution,
+                package,
+                series_link=entry.self_link,
+            )
+            for entry in targets
+        ],
+        on_done=on_done,
+    )
+
     publications: list[Publication] = []
     queried: list[str] = []
     incomplete = False
 
-    for entry in targets:
-        if not entry.self_link:
-            continue
+    for entry, result in zip(targets, results, strict=True):
         queried.append(entry.name)
-        try:
-            rows = client.published_sources(
-                table.distribution, package, series_link=entry.self_link
-            )
-        except NotFound:
+        if isinstance(result, NotFound):
             continue
-        except LaunchpadError:
+        if isinstance(result, BaseException):
             log.warning(
-                "archive lookup failed for %s in %s; archive rules will be skipped",
+                "archive lookup failed for %s in %s (%s); archive rules will be skipped",
                 package,
                 entry.name,
+                result,
             )
             incomplete = True
             continue
@@ -129,7 +146,7 @@ def fetch_archive_index(
                 version=str(row["source_package_version"]),
                 pocket=str(row.get("pocket") or ""),
             )
-            for row in rows
+            for row in result
             if row.get("source_package_version")
         )
 

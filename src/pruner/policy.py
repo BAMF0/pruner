@@ -18,9 +18,29 @@ Veto power is scoped by :class:`~pruner.models.RuleClaim`, which matters more th
 it might appear. See that class for the reasoning; briefly, letting "this is a
 genuine reproducible defect" veto a *lifecycle* rule would mean the best-written
 end-of-life reports are precisely the ones never pruned.
+
+Separately from the LLM, the rules' own proposal can be hardened one step:
+**age escalation** turns an already-eligible ``needs-info`` into ``wont-fix``
+when the bug is older than ``[age].wont_fix_after_days``. Like the rules this is
+deterministic, so it sits on the rule side of the invariant -- the LLM neither
+enables nor disables it -- and like reclassification it can only ever *harden*
+an action, never create one. Ordering against the model's powers is deliberate:
+
+* An LLM **veto still wins over age** (branches 4 and 5 are checked first): if
+  the model is confident the bug is live-release or genuinely reproducible,
+  old age does not close it.
+* LLM **reclassification takes precedence on the reason** (branch 6 checked
+  before age is applied in branch 7): "not a bug report (support-question)"
+  says more than "old" does.
+
+Age escalation is scoped by claim exactly like the veto, defaulting to
+``lifecycle`` only: "old AND on a dead release" is the airtight case. A
+``quality`` hit on an old bug still just asks for information.
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from pruner.config import Config
 from pruner.lp.series import SeriesTable
@@ -40,8 +60,14 @@ from pruner.models import (
 #: ``invalid`` outranks ``needs-info`` because the only rule that proposes it,
 #: ``removed_from_archive``, makes a stronger claim: if the package is gone from
 #: the archive there is no point asking the reporter to re-verify against it.
+#:
+#: ``wont-fix`` is unreachable today -- no rule proposes it; :mod:`pruner.policy`
+#: adds it as a rule-side escalation of an existing ``needs-info``. It is listed
+#: anyway so that a future ``wont-fix`` rule does not silently fall to the
+#: ``.get(…, 0)`` default and rank as ``keep``.
 _ACTION_PRECEDENCE: dict[Action, int] = {
-    Action.INVALID: 3,
+    Action.INVALID: 4,
+    Action.WONT_FIX: 3,
     Action.NEEDS_INFO: 2,
     Action.ESCALATE: 1,
     Action.KEEP: 0,
@@ -64,6 +90,7 @@ def decide(
     verdict: LlmVerdict | None,
     config: Config,
     series: SeriesTable,
+    now: datetime,
 ) -> Decision:
     """Produce the final decision for one bug."""
     rule_action, primary = choose_rule_action(hits)
@@ -75,6 +102,7 @@ def decide(
         *,
         vetoed: bool = False,
         reclassified: bool = False,
+        escalated: bool = False,
     ) -> Decision:
         """Build a Decision with the shared provenance fields already filled in.
 
@@ -91,8 +119,34 @@ def decide(
             rule_action=rule_action,
             llm_vetoed=vetoed,
             llm_reclassified=reclassified,
+            age_escalated=escalated,
             policy_branch=branch,
         )
+
+    def stand(branch: str, note: str = "") -> Decision:
+        """The rules' proposal stands. Applies rule-side age escalation.
+
+        Used by the two branches where the LLM has had nothing (or nothing
+        conclusive) to say. Escalation belongs here, not in a rule, because it
+        never *creates* eligibility -- it only hardens an existing ``needs-info``
+        -- and not in ``actions.py``, because the approvals file a human reviewed
+        must say what will actually happen.
+        """
+        assert primary is not None
+        age = (
+            _escalation_age(bug, primary, config, now)
+            if rule_action is Action.NEEDS_INFO
+            else None
+        )
+        if age is not None:
+            return outcome(
+                Action.WONT_FIX,
+                f"{primary.reason}, and the report is {age / 365.25:.0f} years old "
+                "with no resolution",
+                "age_escalated",
+                escalated=True,
+            )
+        return outcome(rule_action, primary.reason + note, branch)
 
     # 1. Hard exclusions win over everything, including the rules themselves.
     if exclusions:
@@ -100,16 +154,19 @@ def decide(
             Action.KEEP, f"protected: {exclusions[0].reason}", "excluded"
         )
 
-    # 2. Eligibility comes only from rules.
+    # 2. Eligibility comes only from rules. Age escalation happens below, on the
+    #    branches where the rules' proposal stands -- never here, because no rule
+    #    hit means nothing to escalate.
     if rule_action is Action.KEEP or primary is None:
         return outcome(Action.KEEP, "no prune rule matched", "no_rule_hit")
 
     # 3. A failed or absent verdict is silence, never consent. The rules stand.
     if verdict is None or verdict.failed:
         note = " (no LLM assessment available)" if verdict else ""
-        return outcome(rule_action, primary.reason + note, "rules_only")
+        return stand("rules_only", note)
 
     # 4. The model spotted a live release in prose that our matching missed.
+    #    Outranks age escalation: a live release is a live release.
     if live := _live_releases(verdict, series):
         return outcome(
             Action.KEEP,
@@ -120,10 +177,13 @@ def decide(
         )
 
     # 5. Scoped veto: only against rules whose claim the model can contradict.
+    #    Also outranks age escalation.
     if _can_veto(primary.claim) and (why := _veto_reason(verdict, config)):
         return outcome(Action.KEEP, why, "llm_veto", vetoed=True)
 
     # 6. Reclassification, strictly within the eligibility the rules granted.
+    #    Checked before age escalation because its reason is more informative:
+    #    "not a bug report" says more than "old" does.
     if rule_action is Action.NEEDS_INFO and _should_reclassify(verdict, config):
         return outcome(
             Action.INVALID,
@@ -134,7 +194,27 @@ def decide(
         )
 
     # 7. Rules stand, with the model having had its say and not objected.
-    return outcome(rule_action, primary.reason, "rules_with_llm_concurrence")
+    return stand("rules_with_llm_concurrence")
+
+
+def _escalation_age(
+    bug: BugSnapshot, primary: RuleHit, config: Config, now: datetime
+) -> float | None:
+    """Age in days if a rule-eligible ``needs-info`` should be ``wont-fix``, else None.
+
+    Fails closed at every step: disabled config, an out-of-scope claim, and above
+    all an unknown ``date_created`` each mean no escalation. A bug whose age we
+    cannot establish is never old enough to close.
+    """
+    threshold = config.age.wont_fix_after_days
+    if threshold <= 0:
+        return None
+    if primary.claim not in config.age.claims:
+        return None
+    age = bug.age_days(now=now)
+    if age is None or age < threshold:
+        return None
+    return age
 
 
 def _can_veto(claim: RuleClaim) -> bool:

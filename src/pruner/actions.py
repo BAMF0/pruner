@@ -51,6 +51,7 @@ _ACTIONABLE_STATUSES: frozenset[BugTaskStatus] = frozenset(
 _ACTION_STATUS: dict[Action, BugTaskStatus] = {
     Action.NEEDS_INFO: BugTaskStatus.INCOMPLETE,
     Action.INVALID: BugTaskStatus.INVALID,
+    Action.WONT_FIX: BugTaskStatus.WONT_FIX,
 }
 
 
@@ -109,6 +110,7 @@ def apply_decisions(
             distribution=config.launchpad.distribution,
             package=package,
             service=config.launchpad.service,
+            actor=writer.actor,
             dry_run=dry_run,
             rules=list(decision.rule_names),
             reason=decision.reason,
@@ -262,6 +264,7 @@ def rollback_run(
             distribution=original.distribution,
             package=original.package,
             service=config.launchpad.service,
+            actor=writer.actor,
             dry_run=dry_run,
             reverts_run_id=run_id,
             reason=f"rollback of run {run_id}",

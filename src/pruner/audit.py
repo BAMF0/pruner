@@ -35,6 +35,12 @@ class AuditRecord(BaseModel):
     distribution: str
     package: str
     service: str
+    actor: str = ""
+    """Launchpad username of the account that performed the write.
+
+    Recorded because writes may come from a bot account rather than the person
+    who ran the command -- "who did this" is no longer implicit then, and the
+    audit log is the whole accountability story."""
     dry_run: bool
     outcome: Literal["pending", "applied", "failed", "skipped", "reverted"] = "pending"
     timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

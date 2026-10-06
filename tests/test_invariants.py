@@ -80,9 +80,27 @@ class TestActionSemantics:
         from pruner.models import Action
 
         mutating = {a for a in Action if a.mutates_status}
-        assert mutating == {Action.NEEDS_INFO, Action.INVALID}
+        assert mutating == {Action.NEEDS_INFO, Action.INVALID, Action.WONT_FIX}
         assert not Action.KEEP.mutates_status
         assert not Action.ESCALATE.mutates_status
+
+    def test_every_action_has_a_precedence(self) -> None:
+        """``_ACTION_PRECEDENCE.get`` defaults to 0 -- ``keep`` -- for a missing
+        action, which would silently mis-rank a future action. Every member must
+        be listed explicitly."""
+        from pruner.models import Action
+        from pruner.policy import _ACTION_PRECEDENCE
+
+        assert set(_ACTION_PRECEDENCE) == set(Action)
+
+    def test_model_cannot_recommend_wont_fix(self) -> None:
+        """Won't Fix is a deterministic, rule-side escalation of an eligible
+        needs-info. Offering it to the model would let it propose a close the
+        rules did not shape."""
+        from pruner.llm.schema import _ALLOWED_RECOMMENDATIONS
+        from pruner.models import Action
+
+        assert Action.WONT_FIX.value not in _ALLOWED_RECOMMENDATIONS
 
     def test_rule_claim_is_required_not_defaulted(self) -> None:
         """Enforced by the model rather than by convention: a rule author cannot
@@ -124,6 +142,10 @@ class TestDefaultsAreConservative:
 
         assert from_file.launchpad.support_policy == built_in.launchpad.support_policy
         assert from_file.launchpad.distribution == built_in.launchpad.distribution
+        assert from_file.launchpad.max_concurrency == built_in.launchpad.max_concurrency
+        assert from_file.launchpad.chunk_size == built_in.launchpad.chunk_size
+        assert from_file.launchpad.timeout == built_in.launchpad.timeout
+        assert from_file.launchpad.max_retries == built_in.launchpad.max_retries
         assert from_file.safety.min_quiet_days == built_in.safety.min_quiet_days
         assert from_file.safety.protect_importances == built_in.safety.protect_importances
         assert from_file.safety.protect_tags == built_in.safety.protect_tags
@@ -132,7 +154,24 @@ class TestDefaultsAreConservative:
         assert from_file.rules.min_desc_chars == built_in.rules.min_desc_chars
         assert from_file.llm.reclassify_kinds == built_in.llm.reclassify_kinds
         assert from_file.llm.veto_threshold == built_in.llm.veto_threshold
+        assert from_file.age.wont_fix_after_days == built_in.age.wont_fix_after_days
+        assert from_file.age.claims == built_in.age.claims
+        assert from_file.auth.token_env == built_in.auth.token_env
+        assert from_file.auth.allow_interactive == built_in.auth.allow_interactive
         assert from_file.comment.marker == built_in.comment.marker
+
+    def test_age_escalation_default_is_deliberate(self) -> None:
+        """Age escalation ships *on*: existing runs change behaviour, so the
+        default is asserted explicitly rather than drifting in unnoticed. ~7
+        years is comfortably older than every release Launchpad still lists as
+        supported. Change this test in the same commit that changes the default.
+        """
+        from pruner.config import Config
+        from pruner.models import RuleClaim
+
+        config = Config()
+        assert config.age.wont_fix_after_days == 2555
+        assert config.age.claims == (RuleClaim.LIFECYCLE,)
 
     def test_dry_run_is_the_default_for_apply(self) -> None:
         """``--commit`` must be opt-in."""

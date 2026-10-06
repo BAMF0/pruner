@@ -13,7 +13,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from pruner.models import BugKind, Importance, SupportPolicy
+from pruner.models import BugKind, Importance, RuleClaim, SupportPolicy
 
 DEFAULT_CONFIG_FILENAMES: tuple[str, ...] = ("pruner.toml", ".pruner.toml")
 
@@ -46,8 +46,26 @@ class LaunchpadConfig(BaseModel):
     timeout: float = 30.0
     max_retries: int = 5
     max_concurrency: int = 4
-    """Kept deliberately low. Launchpad throttles, and a backlog sweep is not
-    something that needs to finish in ten seconds."""
+    """Parallel HTTP requests.
+
+    Fetching is latency-bound, not bandwidth-bound: a request costs ~230ms
+    against production Launchpad while often returning a couple of hundred bytes,
+    and a fully enriched bug needs nine of them. Launchpad is HTTP/1.1 only, so
+    there is no multiplexing to exploit -- this is a pool of parallel connections.
+
+    Measured end-to-end on previously-unfetched packages (first touch, so no
+    Launchpad-side cache warming): 230ms/request sequential, 95ms at 4 workers
+    (2.4x), 45ms at 8 (5.1x). The pipeline reaches roughly 85% of the
+    depth-limited optimum at a given worker count, so the worker count is the
+    knob that matters.
+
+    4 is the default because Launchpad publishes no rate limits, launchpadlib
+    itself is sequential, and a backlog sweep is not urgent. If you are working
+    through a large package, ``--concurrency 8`` roughly halves the time again.
+    """
+
+    chunk_size: int = 100
+    """Bugs processed per pipeline pass. Bounds peak memory on large backlogs."""
 
     user_agent: str = "pruner/0.1 (Launchpad backlog triage; +https://launchpad.net)"
 
@@ -160,6 +178,81 @@ class LlmConfig(BaseModel):
         return self.provider != "none"
 
 
+class AgeConfig(BaseModel):
+    """Hardening of ``needs-info`` into ``wont-fix`` for very old bugs.
+
+    This only ever *hardens* an action the rules already authorised. It never
+    creates eligibility: a bug no prune rule flagged is untouched no matter how
+    old it is. See :mod:`pruner.policy`.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    wont_fix_after_days: int = 2555
+    """Bugs older than this many days get Won't Fix instead of Incomplete.
+
+    ~7 years: comfortably older than every release Launchpad still lists as
+    supported, so an over-age bug concerns nothing we ship. ``0`` disables age
+    escalation entirely.
+    """
+
+    claims: tuple[RuleClaim, ...] = (RuleClaim.LIFECYCLE,)
+    """Which rule claims age may escalate, mirroring how the LLM's veto is
+    scoped by :class:`~pruner.models.RuleClaim`.
+
+    Only ``lifecycle`` by default: "old AND on a dead release" is the airtight
+    case. A ``quality`` hit (``empty_report``) still just asks for information --
+    a thin report being old is not itself a reason to close it. ``existence``
+    is pointless to list since ``removed_from_archive`` already proposes
+    ``invalid`` directly.
+    """
+
+
+class AuthConfig(BaseModel):
+    """How the write path authenticates to Launchpad.
+
+    The credential itself never appears in this file -- config names an
+    environment variable or a path, exactly as ``llm.api_key_env`` does. See
+    :mod:`pruner.secrets`.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    token_env: str = "PRUNER_LP_CREDENTIALS"
+    """Environment variable holding a serialised launchpadlib credential.
+
+    The value is the OAuth 1.0a credential for the account you want to act as
+    (a bot, typically), produced once by authorising in a browser. It never
+    touches this file, the keyring, or any other disk location.
+    """
+
+    credentials_file: Path | None = None
+    """Path to a launchpadlib credentials file. Must be ``chmod 600``."""
+
+    allow_interactive: bool = True
+    """Fall back to launchpadlib's keyring/browser flow when nothing above
+    supplied a credential. On by default so a laptop ``pruner apply`` keeps
+    working for a human; set ``false`` in automation so a revoked token fails
+    fast instead of blocking on a browser prompt."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_literal_secrets(cls, data: Any) -> Any:
+        """Catch the one mistake that matters here: a credential pasted into
+        ``pruner.toml``. ``extra="forbid"`` would already reject these keys,
+        but with an unhelpful message, and this is the error worth naming."""
+        if isinstance(data, dict):
+            forbidden = {"token", "access_token", "secret", "consumer_secret"} & set(data)
+            if forbidden:
+                keys = ", ".join(sorted(forbidden))
+                raise ValueError(
+                    f"[auth] must not contain credential material ({keys}). Put the "
+                    "serialised credential in the environment variable named by "
+                    "token_env, or in a chmod 600 file named by credentials_file."
+                )
+        return data
+
+
 class CommentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -185,6 +278,8 @@ class Config(BaseModel):
     safety: SafetyConfig = SafetyConfig()
     rules: RulesConfig = RulesConfig()
     llm: LlmConfig = LlmConfig()
+    age: AgeConfig = AgeConfig()
+    auth: AuthConfig = AuthConfig()
     comment: CommentConfig = CommentConfig()
 
     source_path: Path | None = None

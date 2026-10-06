@@ -130,6 +130,17 @@ class Action(StrEnum):
     INVALID = "invalid"
     """Set the task to Invalid. Used for not-a-bug and gone-from-the-archive cases."""
 
+    WONT_FIX = "wont-fix"
+    """Set the task to Won't Fix because the report is too old to verify against
+    anything we still ship.
+
+    Deliberately distinct from ``INVALID``: Won't Fix does not claim the report
+    was never a real bug, only that we will not act on it. Only :mod:`pruner.policy`
+    may emit it, as an age escalation of an already-eligible ``needs-info`` -- no
+    rule proposes it and the LLM is never offered it, because "how old is this
+    bug" is a deterministic fact the model has nothing to add to.
+    """
+
     ESCALATE = "escalate"
     """Flag for human attention without changing anything.
 
@@ -143,7 +154,7 @@ class Action(StrEnum):
 
     @property
     def mutates_status(self) -> bool:
-        return self in (Action.NEEDS_INFO, Action.INVALID)
+        return self in (Action.NEEDS_INFO, Action.INVALID, Action.WONT_FIX)
 
 
 class IsABug(StrEnum):
@@ -395,6 +406,20 @@ class BugSnapshot(BaseModel):
             return float("inf")
         return ((now or datetime.now(UTC)) - reference).total_seconds() / 86400.0
 
+    def age_days(self, *, now: datetime | None = None) -> float | None:
+        """Days since this bug was reported. ``None`` if ``date_created`` is unknown.
+
+        Deliberately asymmetric with :meth:`quiet_days`, which returns ``inf`` when
+        the dates are missing. ``quiet_days`` feeds a *veto* (the ``recently_active``
+        exclusion), so failing open towards "quiet" only ever costs an opportunity
+        to prune. ``age_days`` feeds an *authorisation* (closing a bug as Won't
+        Fix), so it must fail closed: if we do not know how old a bug is, it is
+        not old enough to close.
+        """
+        if self.date_created is None:
+            return None
+        return ((now or datetime.now(UTC)) - self.date_created).total_seconds() / 86400.0
+
     @classmethod
     def from_api(
         cls,
@@ -550,6 +575,10 @@ class Decision(BaseModel):
 
     llm_vetoed: bool = False
     llm_reclassified: bool = False
+    age_escalated: bool = False
+    """True when a rule-eligible ``needs-info`` was hardened to ``wont-fix``
+    because the bug is older than ``[age].wont_fix_after_days``. Deterministic,
+    like the rules; the LLM has no say in it."""
     policy_branch: str = ""
     """Which branch of :mod:`pruner.policy` produced ``action``."""
 

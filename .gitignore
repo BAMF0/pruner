@@ -6,6 +6,12 @@
 # Generated reports and approvals files.
 out/
 
+# Launchpad write credentials. Never commit these: they are OAuth access
+# tokens with write access to the tracker.
+*.credentials
+*.lp-credentials
+launchpad-credentials*
+
 # Python
 __pycache__/
 *.py[cod]

@@ -385,7 +385,7 @@ class TestEndToEnd:
 
     def _bugs(self):
         return [
-            # 1: classic EOL apport bug -> needs-info
+            # 1: classic EOL apport bug, 3000 days old -> wont-fix (age escalation)
             make_bug(
                 bug_id=1,
                 apport=ApportInfo(distro_release="14.04", package="vim"),
@@ -410,7 +410,7 @@ class TestEndToEnd:
                 apport=ApportInfo(distro_release="14.04"),
                 quiet_days=5,
             ),
-            # 5: obsolete series tag -> needs-info
+            # 5: obsolete series tag -> wont-fix (age escalation)
             make_bug(bug_id=5, tags=("focal",), description="crash on exit. " * 20),
             # 6: on a supported release -> nothing fires
             make_bug(
@@ -436,11 +436,11 @@ class TestEndToEnd:
     ) -> None:
         result = self._run(config, series, archive)
         actions = {d.bug_id: d.action for d in result.decisions}
-        assert actions[1] is Action.NEEDS_INFO
+        assert actions[1] is Action.WONT_FIX
         assert actions[2] is Action.KEEP
         assert actions[3] is Action.KEEP
         assert actions[4] is Action.KEEP
-        assert actions[5] is Action.NEEDS_INFO
+        assert actions[5] is Action.WONT_FIX
         assert actions[6] is Action.KEEP
 
     def test_protection_reasons_are_specific(
@@ -456,8 +456,9 @@ class TestEndToEnd:
     ) -> None:
         stats = self._run(config, series, archive).stats
         assert stats.bugs == 6
-        assert stats.actions.get("needs-info") == 2
+        assert stats.actions.get("wont-fix") == 2
         assert stats.actions.get("keep") == 4
+        assert stats.age_escalations == 2
         assert stats.eligible_before_llm == 2
 
     def test_llm_disabled_means_no_verdicts(

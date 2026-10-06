@@ -16,6 +16,11 @@ asking the reporter to confirm, or **Invalid** when the report is not a bug at a
 and Launchpad's janitor expires unanswered Incomplete bugs after ~60 days. The
 tool asks a question rather than pronouncing a verdict.
 
+The exception is age: an eligible end-of-life bug older than
+`[age].wont_fix_after_days` (default ~7 years) is closed as **Won't Fix** instead.
+Asking a 2012 reporter to re-verify is theatre; Won't Fix is honest without
+claiming the bug was never real. Set the threshold to `0` to disable this.
+
 ## Safety model
 
 This writes to a public bug tracker on other people's reports, so the design is
@@ -30,12 +35,13 @@ Concretely:
 | --- | --- |
 | **Eligibility** | Only deterministic rules, on concrete evidence, can flag a bug. |
 | **The LLM** | Can *veto* an action, or change an eligible `needs-info` into `invalid`. It can never create one. A failed or unparseable response is silence, never consent. |
+| **Age escalation** | Deterministic, rule-side: an eligible `needs-info` becomes `wont-fix` when the bug is older than `[age].wont_fix_after_days` (default ~7 years). It can only *harden* an action, never create one, and an unknown `date_created` never escalates. |
 | **Hard exclusions** | 16 vetoes (security, patches, assignees, popularity, recent activity, …) override rules *and* the LLM. |
 | **Read/write split** | `fetch`/`analyze`/`report` use anonymous HTTP GETs and hold no credentials. `launchpadlib` is imported only by `lp/write.py`. Enforced by a test. |
 | **Review gate** | `apply` acts only on bugs approved in a file bound to a specific analysis run. |
 | **Live re-check** | Every task's status is re-read immediately before mutation, so a human's triage since the analysis is never clobbered. |
 | **Circuit breaker** | `max_actions_per_run` (default 50) caps the damage a bad policy can do. |
-| **Reversibility** | Every mutation is logged with its prior status; `pruner rollback` restores it. |
+| **Reversibility** | Every mutation is logged with its prior status *and the account that made it*; `pruner rollback` restores it. |
 
 The invariant is tested exhaustively across the cross-product of every possible
 model output (`tests/test_policy.py::TestLlmCannotCreateAction`).
@@ -189,6 +195,49 @@ a tenth of a typical backlog. That is a large cost saving and means most reports
 are never sent anywhere. Verdicts are cached against a fingerprint of exactly the
 text the model saw, so re-running after a threshold change costs nothing.
 
+## Speed
+
+Fetching is **latency-bound, not bandwidth-bound**: a Launchpad request costs
+~230 ms while often returning a couple of hundred bytes, and a fully enriched bug
+needs nine of them. Launchpad is HTTP/1.1 only, so there is no multiplexing to
+exploit — requests run through a bounded pool of parallel connections, sized to
+match the HTTP connection pool.
+
+Measured end-to-end on previously-unfetched packages (first touch, so no
+Launchpad-side cache warming flattering the numbers):
+
+| workers | package | requests | elapsed | per request | speedup |
+|---|---|---|---|---|---|
+| 1 | rxvt-unicode | 147 | 34.3 s | 230 ms | — |
+| **4** (default) | mc | 104 | 10.3 s | 95 ms | **2.4×** |
+| 8 | screen | 251 | 11.8 s | 45 ms | **5.1×** |
+
+The pipeline reaches roughly 85% of the depth-limited optimum for a given worker
+count, so the worker count is the knob that matters:
+
+```bash
+pruner fetch --package xterm -j 8
+```
+
+Per-bug request budget, asserted by tests so it cannot silently regress:
+
+| | requests |
+|---|---|
+| Bug skipped by the cheap prefilter | **2** |
+| Bug fully enriched | **9** |
+| Bug unchanged since last run (ETag revalidated) | **1** |
+
+Re-runs are cheap: bug entries are revalidated with `If-None-Match`, and a 304
+means the cached snapshot stands and the other six requests are skipped entirely.
+A fully-cached re-fetch of a 20-bug package takes ~1.5 s.
+
+> One Launchpad quirk worth knowing if you touch this code: Apache's
+> `mod_deflate` appends `-gzip` to the ETag of a compressed response but compares
+> `If-None-Match` against the *uncompressed* tag. Since httpx requests gzip by
+> default, echoing the tag back verbatim always misses — and fails silently, as a
+> permanent full download rather than an error. `normalise_etag()` strips it, and
+> a test pins the behaviour.
+
 ## Configuration
 
 `pruner.toml` ships with the defaults written out and commented; a test asserts
@@ -205,6 +254,35 @@ it matches the code so it cannot drift. The conservative ones:
 | `min_desc_chars` | 120 | Prose, apport metadata excluded |
 | `veto_threshold` | 0.6 | Confidence for the model to block |
 | `reclassify_threshold` | 0.8 | Confidence for needs-info → invalid |
+| `wont_fix_after_days` | 2555 (~7y) | Age for needs-info → wont-fix; 0 disables |
+| `max_concurrency` | 4 | Parallel requests; see [Speed](#speed) |
+
+## Bot accounts and credentials
+
+By default `apply` writes as *you*, via launchpadlib's keyring (one browser
+authorisation). To write as a bot account instead:
+
+1. Authorise once **as the bot** — log into Launchpad as the bot in your
+   browser and run any launchpadlib login (e.g. `pruner whoami --service
+   staging`). This produces a serialised OAuth 1.0a credential. Launchpad has
+   no API-token/PAT concept; that blob *is* the credential.
+2. Supply it via the environment, never `pruner.toml`:
+
+   ```bash
+   export PRUNER_LP_CREDENTIALS="$(cat bot.credentials)"   # or from your secret manager
+   pruner whoami    # verify: should print the bot's username, not yours
+   ```
+
+   Or point `[auth].credentials_file` at a `chmod 600` file. A group- or
+   world-readable credentials file is refused outright.
+
+The credential never lands in the config file (a literal token in `[auth]` is
+rejected), in the keyring, or in any log — and `apply` names the account in its
+production confirmation prompt, because thinking you are the bot when you are
+actually yourself is the main failure mode this feature introduces. Every audit
+record also carries the acting username. In automation, set
+`[auth].allow_interactive = false` so a revoked token fails fast instead of
+hanging on a browser prompt.
 
 ## Comments posted
 
@@ -242,7 +320,7 @@ recognise its own comments and never nag the same bug twice.
 ## Development
 
 ```bash
-uv run pytest              # 644 tests, no network
+uv run pytest              # 692 tests, no network
 uv run ruff check src tests
 uv run mypy src/pruner     # strict
 uv run python -m tests.record_fixtures   # refresh recorded Launchpad payloads
@@ -256,6 +334,8 @@ the series table are pinned, since the EOL rules are functions of the calendar.
 
 - Rehearse against `--service staging`, a real copy of production whose writes
   are discarded.
+- If a bot account is in play, run `pruner whoami` first: the account it prints
+  is the one every bug's history will name.
 - Run with `--llm none` first and read `pruner stats` to see which rules fire and
   how often.
 - Read the "Flagged but spared" section of the report: a systematic pattern there

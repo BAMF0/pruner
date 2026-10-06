@@ -21,6 +21,7 @@ from pruner.lp.series import SeriesTable
 from pruner.models import (
     Action,
     BugKind,
+    BugSnapshot,
     Exclusion,
     IsABug,
     LlmVerdict,
@@ -28,7 +29,7 @@ from pruner.models import (
     RuleHit,
 )
 from pruner.policy import choose_rule_action, decide
-from tests.conftest import make_bug
+from tests.conftest import NOW, make_bug
 
 
 def hit(
@@ -51,15 +52,27 @@ def run(
     hits: tuple[RuleHit, ...] = (),
     exclusions: tuple[Exclusion, ...] = (),
     llm: LlmVerdict | None = None,
+    bug: BugSnapshot | None = None,
 ):
     return decide(
-        make_bug(),
+        bug or make_bug(),
         hits=hits,
         exclusions=exclusions,
         verdict=llm,
         config=config,
         series=series,
+        now=NOW,
     )
+
+
+def young_bug() -> BugSnapshot:
+    """A bug old enough to be quiet, far too young for age escalation.
+
+    Tests whose premise is the LLM's behaviour (veto, reclassification) use this
+    so the outcome is not also shaped by ``[age].wont_fix_after_days``; age
+    escalation has its own dedicated test class.
+    """
+    return make_bug(quiet_days=400)
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +84,14 @@ class TestLlmCannotCreateAction:
     """No combination of model output may action a bug the rules did not flag."""
 
     @pytest.mark.parametrize(
-        ("is_bug", "kind", "recommendation", "confidence"),
+        ("is_bug", "kind", "recommendation", "confidence", "quiet_days"),
         list(
             itertools.product(
                 list(IsABug),
                 list(BugKind),
                 list(Action),
                 [0.0, 0.5, 0.9, 1.0],
+                [10, 3000, 30000],
             )
         ),
     )
@@ -89,11 +103,14 @@ class TestLlmCannotCreateAction:
         kind: BugKind,
         recommendation: Action,
         confidence: float,
+        quiet_days: int,
     ) -> None:
+        """Neither model output nor extreme age can create eligibility."""
         decision = run(
             config,
             series,
             hits=(),
+            bug=make_bug(quiet_days=quiet_days),
             llm=verdict(
                 is_actually_a_bug=is_bug,
                 bug_kind=kind,
@@ -110,6 +127,7 @@ class TestLlmCannotCreateAction:
     def test_exclusion_always_wins(
         self, config: Config, series: SeriesTable, recommendation: Action
     ) -> None:
+        """Including against age escalation: the bug here is 3000 days old."""
         decision = run(
             config,
             series,
@@ -129,7 +147,7 @@ class TestLlmCannotCreateAction:
 
 class TestRulesOnly:
     def test_no_verdict_means_rules_stand(self, config: Config, series: SeriesTable) -> None:
-        decision = run(config, series, hits=(hit(),), llm=None)
+        decision = run(config, series, hits=(hit(),), bug=young_bug(), llm=None)
         assert decision.action is Action.NEEDS_INFO
         assert decision.policy_branch == "rules_only"
 
@@ -138,7 +156,11 @@ class TestRulesOnly:
     ) -> None:
         """A provider outage must not change the outcome, and must be visible."""
         decision = run(
-            config, series, hits=(hit(),), llm=LlmVerdict.no_opinion(failed=True)
+            config,
+            series,
+            hits=(hit(),),
+            bug=young_bug(),
+            llm=LlmVerdict.no_opinion(failed=True),
         )
         assert decision.action is Action.NEEDS_INFO
         assert decision.policy_branch == "rules_only"
@@ -258,6 +280,7 @@ class TestLifecycleVetoScoping:
             config,
             series,
             hits=(hit("eol_apport_release", claim=RuleClaim.LIFECYCLE),),
+            bug=young_bug(),
             llm=verdict(
                 is_actually_a_bug=IsABug.YES,
                 bug_kind=BugKind.DEFECT,
@@ -331,6 +354,7 @@ class TestLiveReleaseVeto:
             config,
             series,
             hits=(hit("eol_apport_release"),),
+            bug=young_bug(),
             llm=verdict(releases_mentioned=("14.04", "focal"), confidence=0.9),
         )
         assert decision.action is Action.NEEDS_INFO
@@ -340,6 +364,7 @@ class TestLiveReleaseVeto:
             config,
             series,
             hits=(hit("eol_apport_release"),),
+            bug=young_bug(),
             llm=verdict(releases_mentioned=("", "banana", "99.04")),
         )
         assert decision.action is Action.NEEDS_INFO
@@ -401,6 +426,7 @@ class TestReclassification:
             config,
             series,
             hits=(hit(),),
+            bug=young_bug(),
             llm=verdict(
                 is_actually_a_bug=IsABug.NO,
                 bug_kind=BugKind.FEATURE_REQUEST,
@@ -433,6 +459,7 @@ class TestReclassification:
             config,
             series,
             hits=(hit(),),
+            bug=young_bug(),
             llm=verdict(
                 is_actually_a_bug=IsABug.NO,
                 bug_kind=BugKind.SUPPORT_QUESTION,
@@ -446,6 +473,7 @@ class TestReclassification:
             config,
             series,
             hits=(hit(),),
+            bug=young_bug(),
             llm=verdict(
                 is_actually_a_bug=IsABug.UNCLEAR,
                 bug_kind=BugKind.SUPPORT_QUESTION,
@@ -460,6 +488,7 @@ class TestReclassification:
             config,
             series,
             hits=(hit(),),
+            bug=young_bug(),
             llm=verdict(
                 is_actually_a_bug=IsABug.NO,
                 bug_kind=BugKind.SUPPORT_QUESTION,
@@ -500,3 +529,136 @@ class TestDecisionProvenance:
         assert decision.verdict is llm
         assert decision.policy_branch
         assert decision.actionable
+
+
+# ---------------------------------------------------------------------------
+# Age escalation
+# ---------------------------------------------------------------------------
+
+
+class TestAgeEscalation:
+    """Rule-side hardening of ``needs-info`` into ``wont-fix`` for very old bugs.
+
+    Distinct from the LLM's powers: deterministic, no model involvement, and
+    strictly incapable of creating eligibility -- that direction is asserted
+    exhaustively by ``TestLlmCannotCreateAction`` via its ``quiet_days`` axis.
+    """
+
+    def test_old_lifecycle_bug_becomes_wont_fix(
+        self, config: Config, series: SeriesTable
+    ) -> None:
+        decision = run(config, series, hits=(hit(),), llm=None)
+        assert decision.action is Action.WONT_FIX
+        assert decision.policy_branch == "age_escalated"
+        assert decision.age_escalated
+
+    def test_provenance_keeps_the_original_rule_action(
+        self, config: Config, series: SeriesTable
+    ) -> None:
+        decision = run(config, series, hits=(hit(),), llm=None)
+        assert decision.rule_action is Action.NEEDS_INFO
+        assert not decision.llm_reclassified
+        assert decision.reason.startswith("eol_apport_release fired")
+        assert "8 years old" in decision.reason  # the default bug is 3000 days old
+
+    def test_applies_with_llm_concurrence(self, config: Config, series: SeriesTable) -> None:
+        """Deterministic, so it does not need the LLM to have spoken -- but a
+        concurring model does not block it either."""
+        decision = run(config, series, hits=(hit(),), llm=verdict(confidence=0.1))
+        assert decision.action is Action.WONT_FIX
+        assert decision.policy_branch == "age_escalated"
+
+    def test_live_release_veto_beats_age(self, config: Config, series: SeriesTable) -> None:
+        decision = run(
+            config,
+            series,
+            hits=(hit(),),
+            llm=verdict(releases_mentioned=("noble",)),
+        )
+        assert decision.action is Action.KEEP
+        assert not decision.age_escalated
+
+    def test_scoped_veto_beats_age(self, series: SeriesTable) -> None:
+        """Reachable only when quality claims are opted into escalation: branch
+        order pins that even then, the veto is checked first."""
+        config = Config.model_validate({"age": {"claims": ["lifecycle", "quality"]}})
+        decision = run(
+            config,
+            series,
+            hits=(hit("empty_report", claim=RuleClaim.QUALITY),),
+            llm=verdict(recommendation=Action.KEEP, confidence=0.9),
+        )
+        assert decision.action is Action.KEEP
+        assert decision.llm_vetoed
+
+    def test_reclassification_beats_age(self, config: Config, series: SeriesTable) -> None:
+        """"Not a bug report" says more than "old" does."""
+        decision = run(
+            config,
+            series,
+            hits=(hit(),),
+            llm=verdict(
+                is_actually_a_bug=IsABug.NO,
+                bug_kind=BugKind.SUPPORT_QUESTION,
+                confidence=0.95,
+            ),
+        )
+        assert decision.action is Action.INVALID
+        assert decision.llm_reclassified
+        assert not decision.age_escalated
+
+    def test_unknown_creation_date_never_escalates(
+        self, config: Config, series: SeriesTable
+    ) -> None:
+        """``age_days`` fails closed, deliberately unlike ``quiet_days``: an
+        unknown date must never authorise a close."""
+        bug = make_bug(date_created=None)
+        decision = run(config, series, hits=(hit(),), bug=bug, llm=None)
+        assert decision.action is Action.NEEDS_INFO
+        assert not decision.age_escalated
+
+    def test_disabled_when_threshold_zero(self, series: SeriesTable) -> None:
+        config = Config.model_validate({"age": {"wont_fix_after_days": 0}})
+        decision = run(config, series, hits=(hit(),), llm=None)
+        assert decision.action is Action.NEEDS_INFO
+
+    def test_threshold_boundary(self, config: Config, series: SeriesTable) -> None:
+        over = run(config, series, hits=(hit(),), bug=make_bug(quiet_days=2555), llm=None)
+        under = run(config, series, hits=(hit(),), bug=make_bug(quiet_days=2554), llm=None)
+        assert over.action is Action.WONT_FIX
+        assert under.action is Action.NEEDS_INFO
+
+    def test_quality_claim_not_escalated_by_default(
+        self, config: Config, series: SeriesTable
+    ) -> None:
+        """A thin report being old is not itself a reason to close it."""
+        decision = run(
+            config,
+            series,
+            hits=(hit("empty_report", claim=RuleClaim.QUALITY),),
+            llm=None,
+        )
+        assert decision.action is Action.NEEDS_INFO
+        assert not decision.age_escalated
+
+    def test_quality_claim_escalates_when_configured(self, series: SeriesTable) -> None:
+        config = Config.model_validate({"age": {"claims": ["lifecycle", "quality"]}})
+        decision = run(
+            config,
+            series,
+            hits=(hit("empty_report", claim=RuleClaim.QUALITY),),
+            llm=None,
+        )
+        assert decision.action is Action.WONT_FIX
+
+    def test_invalid_hit_is_untouched(self, config: Config, series: SeriesTable) -> None:
+        """Escalation only hardens needs-info; an existence finding already
+        proposes the stronger action."""
+        decision = run(
+            config,
+            series,
+            hits=(hit("removed_from_archive", Action.INVALID, RuleClaim.EXISTENCE),),
+            llm=None,
+        )
+        assert decision.action is Action.INVALID
+        assert not decision.age_escalated
